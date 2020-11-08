@@ -4,9 +4,9 @@
 
 ## "Done"
 
-- In-memory B+-tree ([`axdb.memory.BPlusTree`](axdb/memory.py))
-- Pager ([`axdb.pager.Pager`](axdb/pager.py))
-- LRU cache with graveyard ([`axdb.cache.LRUCache`](axdb/cache.py))
+- In-memory B+-tree ([`dbstuff.memory.BPlusTree`](dbstuff/memory.py))
+- Pager ([`dbstuff.pager.Pager`](dbstuff/pager.py))
+- LRU cache with graveyard ([`dbstuff.cache.LRUCache`](dbstuff/cache.py))
 
 ## TODO
 
