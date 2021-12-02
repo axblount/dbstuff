@@ -458,11 +458,12 @@ class Pager:
 
         while togo > 0:
             # we still have data to read, so fetch the next overflow page.
-            page = OverflowPage.from_page(self.get_page(page.next_overflow_pageno))
+            page = OverflowPage.from_page(
+                self.get_page(page.next_overflow_pageno)
+            )
             # continue reading the data from the start of the next overflow page.
             current_data, togo = page.read_continue(0, togo)
             # append new data
             data += current_data
 
         return data
-

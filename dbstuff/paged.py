@@ -46,7 +46,7 @@ OverflowPage `Struct('!BI4091B')`:
 """
 
 from array import ArrayType, array
-from struct import Struct
+from named_struct import NamedStruct, UShort, UByte, UInt
 
 
 def bytes2u64(b: bytes) -> int:
@@ -63,8 +63,50 @@ def slice_key(k: str) -> ArrayType[int]:
     return slices
 
 
+class PagedNode:
+    @classmethod
+    def from_page(cls, page_data):
+        cls.PageFormat.unpack(page_data)
+
+
+PAGE_SIZE = 4096
+
 class InteriorNode:
-    """
+    # New style:
+    # Interior nodes have a header and a payload.
+    # the payload will not have a fixed format and will need to be parsed out
+    # as the node can have a variable number of keys with variable lengths.
+
+    HEADER_SIZE = 5
+    MAX_WEIGHT = PAGE_SIZE - HEADER_SIZE
+
+    class PageFormat(NamedStruct, byteorder='!'):
+        magic = UShort()
+        page_type = UByte(default=1)
+        weight = UShort()
+        payload = UByte(PAGESIZE - 5)
+
+    def __init__(self, keys: List[bytes], children: List[int]):
+        assert len(children) == len(keys) + 1
+        self.keys = keys
+        self.children = children
+
+    @property
+    def weight(self):
+        w = 0
+        for k in keys:
+            w += len(k)
+        w += 4 * len(children)
+        return w
+
+    @staticmethod
+    def from_page(page_data):
+        PageFormat.unpack(page_data)
+
+
+"""
+class InteriorNode:
+    \"""
     Interior page
       uint16_t      MAGIC
       uint8_t       page type (1 for interior nodes)
@@ -72,7 +114,7 @@ class InteriorNode:
       uint8_t[4]    zero
       uint64_t[255] key_slices
       uint64_t[256] child_pointers
-    """
+    \"""
 
     page_format = Struct("!HBBxxxx255Q256Q")
     assert page_format.size == 4096, "InteriorNode doesn't fit in a page."
@@ -100,3 +142,4 @@ class InteriorNode:
 
 # print(slice_key('Hello, World!'))
 # InteriorNode().pack()
+"""

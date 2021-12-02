@@ -1,5 +1,6 @@
 from typing import Any, Mapping
 from collections import OrderedDict
+from struct import Struct
 
 
 # PEP 520
@@ -19,39 +20,37 @@ class FieldType:
         return str(self.count) + self.CODE
 
 
-CODES: Mapping[str, Any] = {
-    "x": "Padding",
-    "b": "Byte",
-    "B": "UByte",
-    "h": "Short",
-    "H": "UShort",
-}
+CODES: Mapping[str, FieldType] = {}
 
-module = globals()
-for k, v in CODES.items():
-    typ = type(v, (FieldType,), {"CODE": k})
-    module[v] = typ
-    CODES[k] = typ
 
-"""
-# fmt: off
-class Padding(FieldType, CODE="x"): pass  # noqa: E701
-class Byte(FieldType, CODE="b"): pass  # noqa: E701
-class UByte(FieldType, CODE="B"): pass  # noqa: E701
-class Short(FieldType, CODE="h"): pass  # noqa: E701
-class UShort(FieldType, CODE="H"): pass  # noqa: E701
-"""
+def make_field_type(name, code):
+    typ = type(name, (FieldType,), {"CODE": k})
+    CODES[code] = typ
+    return typ
+
+
+Padding = make_field_type("Padding", "x")
+Byte = make_field_type("Byte", "b")
+UByte = make_field_type("UByte", "B")
+Short = make_field_type("Short", "h")
+UShort = make_field_type("UShort", "H")
+Int = make_field_type('Int', 'i')
+UInt = make_field_type('UInt', 'I')
 
 
 def normalize_field(field):
     if isinstance(field, str):
+        # TODO: parse out the count if there is one
         return CODES[field]()
-    return field
+    elif isinstance(field, FieldType):
+        return field
+    raise ValueError("Bad field type")
 
 
-class Struct:
+class NamedStruct:
     __fields: OrderedDict[str, FieldType]
     struct_format: str
+    struct: Struct
 
     def __init_subclass__(cls, byteorder="", **kwargs) -> None:
         fields = OrderedDict()
@@ -64,10 +63,24 @@ class Struct:
                 struct_format.append(str(field))
         setattr(cls, "__fields", fields)
         setattr(cls, "struct_format", "".join(struct_format))
+        setattr(cls, "struct", Struct(struct_format))
         super().__init_subclass__(**kwargs)
 
+    @classmethod
+    def unpack(cls, data):
+        # FIXME: this should return an instance of NamedStruct
 
-class MyStruct(Struct, byteorder="!"):
+        return cls.struct.unpack(data)
+
+    def pack(self, *args) -> bytes:
+        return self.struct.pack(*args)
+
+    @property
+    def size(self):
+        return self.struct.size()
+
+
+class MyStruct(NamedStruct, byteorder="!"):
     barf = "x"
     something = Byte(24)
     what = Padding(5)
