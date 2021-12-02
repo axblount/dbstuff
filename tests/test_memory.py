@@ -1,30 +1,22 @@
+import pytest
 from random import shuffle
 from dbstuff.memory import BPlusTree
 
 
-def test_single():
-    bt = BPlusTree()
-    bt[1] = "a"
-    assert bt[1] == "a"
-    del bt[1]
-    assert bt[1] is None
-
-
-def test_random():
-    N = 1000
-
-    r = list(range(1, N + 1))
+@pytest.mark.parametrize("order", range(3, 20))
+def test_tree_random(order):
+    r = list(range(order * 10))
     shuffle(r)
 
-    bt = BPlusTree()
+    bt = BPlusTree(order)
 
     for i in r:
-        bt[i] = i * 1000
+        bt[i] = i
 
     shuffle(r)
     for i in r:
         x = bt[i]
-        assert x == i * 1000
+        assert x == i
 
     shuffle(r)
     for i in r:

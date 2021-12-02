@@ -1,30 +1,38 @@
+from __future__ import annotations
 from bisect import bisect_left, bisect_right
+from math import ceil
+from typing import Generic, List, Optional, Tuple, TypeVar
 from dbstuff.util import Entry, split_list
+from enum import Enum
 
-
-# TODO: make these tree parameters instead of constants.
-# TODO: Allow odd order.
-ORDER = 8
-assert ORDER % 2 == 0
-MAX_KEYS = ORDER - 1
-MIN_KEYS = MAX_KEYS // 2
 
 # These are the signals returned by child nodes after performing an operation.
 # REBALANCE on insert means the child is too full.
 # REBALANCE on delete means the child is too empty.
-DONE = "DONE"
-REBALANCE = "REBALANCE"
+class ChildStatus(Enum):
+    DONE = "DONE"
+    REBALANCE = "REBALANCE"
 
 
-class BPlusTree:
+K = TypeVar("K")  # key
+V = TypeVar("V")  # value
+
+
+class BPlusTree(Generic[K, V]):
     """An in-memory B+-tree with arbitrary keys and values.
 
     TODO: add an iterator for in-order traversal.
     """
 
-    def __init__(self):
-        self.root = InteriorNode()
-        self.root.children = [LeafNode(None, None)]
+    def __init__(self, order: int):
+        if order < 3:
+            raise ValueError("BPlusTree order must be >= 3")
+        self.ORDER = order
+        self.MAX_KEYS = self.ORDER - 1
+        self.MIN_KEYS = ceil(self.MAX_KEYS / 2)
+
+        self.root = InteriorNode(self)
+        self.root.children = [LeafNode(self, None, None)]
 
     @property
     def first_leaf(self):
@@ -42,16 +50,16 @@ class BPlusTree:
             node = node.children[-1]
         return node
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: K, value: V):
         result = self.root.insert(key, value)
-        if result == REBALANCE:
+        if result == ChildStatus.REBALANCE:
             median, right_child = self.root.split()
-            new_root = InteriorNode()
+            new_root = InteriorNode(self)
             new_root.keys = [median]
             new_root.children = [self.root, right_child]
             self.root = new_root
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: K) -> Optional[V]:
         dummy = Entry(key, None)
         leaf = self.root.find_leaf(key)
         if dummy in leaf.entries:
@@ -59,12 +67,12 @@ class BPlusTree:
             return leaf.entries[i].value
         return None
 
-    def __contains__(self, key):
+    def __contains__(self, key: K) -> bool:
         dummy = Entry(key, None)
         leaf = self.root.find_leaf(key)
         return dummy in leaf.entries
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: K):
         self.root.delete(key)
         if len(self.root.keys) == 0 and isinstance(
             self.root.children[0], InteriorNode
@@ -72,14 +80,15 @@ class BPlusTree:
             self.root = self.root.children[0]
 
     def show(self):
-        return self.root.show()
+        self.root.show()
 
 
-class InteriorNode:
+class InteriorNode(Generic[K, V]):
     """A B+-tree interior (non-leaf) node."""
 
-    def __init__(self):
-        self.keys = []
+    def __init__(self, tree: BPlusTree[K, V]):
+        self.tree = tree
+        self.keys: List[K] = []
         self.children = []
 
     def show(self, level=0):
@@ -87,7 +96,7 @@ class InteriorNode:
         for c in self.children:
             c.show(level + 1)
 
-    def find_leaf(self, key):
+    def find_leaf(self, key: K) -> LeafNode:
         ii = -1
         for i, k in enumerate(self.keys):
             if key < k:
@@ -95,50 +104,53 @@ class InteriorNode:
                 break
         return self.children[ii].find_leaf(key)
 
-    def split(self):
+    def split(self) -> Tuple[K, InteriorNode[K, V]]:
         """creates a new right sibling and moves half the keys over"""
-        right_sib = InteriorNode()
-        median = self.keys.pop(len(self.keys) // 2 - 1)
+        assert len(self.keys) == self.tree.MAX_KEYS + 1
+        right_sib = InteriorNode(self.tree)
+        median = self.keys.pop(ceil(len(self.keys) / 2 - 1))
         self.keys, right_sib.keys = split_list(self.keys)
         self.children, right_sib.children = split_list(self.children)
+        assert len(self.keys) + 1 == len(self.children)
+        assert len(right_sib.keys) + 1 == len(right_sib.children)
         return median, right_sib
 
-    def insert(self, key, value):
+    def insert(self, key: K, value: V) -> ChildStatus:
         i = bisect_right(self.keys, key)
         child = self.children[i]
         result = child.insert(key, value)
 
-        if result == REBALANCE:
+        if result == ChildStatus.REBALANCE:
             median, right_child = child.split()
             self.keys.insert(i, median)
             self.children.insert(i + 1, right_child)
 
-            if len(self.keys) > MAX_KEYS:
-                return REBALANCE
+            if len(self.keys) > self.tree.MAX_KEYS:
+                return ChildStatus.REBALANCE
 
-        return DONE
+        return ChildStatus.DONE
 
-    def delete(self, key):
+    def delete(self, key: K) -> ChildStatus:
         # which index to descend?
         i = bisect_right(self.keys, key)
         child = self.children[i]
 
         # delete from child tree and see what we need to do.
         result = child.delete(key)
-        if result == REBALANCE:
+        if result == ChildStatus.REBALANCE:
             self.rebalance_after_delete(i)
-            if len(self.keys) < MIN_KEYS:
-                return REBALANCE
-        return DONE
+            if len(self.keys) < self.tree.MIN_KEYS:
+                return ChildStatus.REBALANCE
+        return ChildStatus.DONE
 
-    def rebalance_after_delete(self, i):
-        """
-        rebalance child i.
-        try to borrow,
-        otherwise merge
+    def rebalance_after_delete(self, i: int):
+        """Rebalance child `i` after a deletion
+
+        Try to borrow,otherwise merge.
         """
 
         child = self.children[i]
+        assert child.is_minimal()
 
         # find right sibling
         right_sib = None
@@ -172,12 +184,11 @@ class InteriorNode:
             del self.keys[i - 1]
         else:
             # only root should reach this
-            # FIXME: enforce this condition
-            pass
+            assert self == self.tree.root
 
         assert len(self.keys) == len(self.children) - 1
 
-    def borrow_right(self, median, right_sib):
+    def borrow_right(self, median: K, right_sib: InteriorNode[K, V]) -> K:
         """
         borrow from right sib
         return the new median for parent to use
@@ -191,7 +202,7 @@ class InteriorNode:
 
         return new_median
 
-    def borrow_left(self, median, left_sib):
+    def borrow_left(self, median: K, left_sib: InteriorNode[K, V]) -> K:
         """
         borrow from left sib
         return the new median for parent to use
@@ -205,7 +216,9 @@ class InteriorNode:
 
         return new_median
 
-    def merge(self, median, right_sib):
+    def merge(
+        self, median: K, right_sib: InteriorNode[K, V]
+    ) -> InteriorNode[K, V]:
         """
         merge with the right sibling.
         return a pointer to the new child.
@@ -220,27 +233,33 @@ class InteriorNode:
 
         return self
 
-    def is_minimal(self):
-        return len(self.keys) <= MIN_KEYS
+    def is_minimal(self) -> bool:
+        return len(self.keys) <= self.tree.MIN_KEYS
 
 
-class LeafNode:
+class LeafNode(Generic[K, V]):
     """A B+-tree leaf node containing keys and data."""
 
-    def __init__(self, prev_leaf, next_leaf):
-        self.entries = []
+    def __init__(
+        self,
+        tree: BPlusTree[K, V],
+        prev_leaf: Optional[LeafNode[K, V]],
+        next_leaf: Optional[LeafNode[K, V]],
+    ):
+        self.tree = tree
         self.prev_leaf = prev_leaf
         self.next_leaf = next_leaf
+        self.entries: List[Entry[K, V]] = []
 
     def show(self, level=0):
         print("  " * level, self.entries)
 
-    def find_leaf(self, _key):
+    def find_leaf(self, _key: K) -> LeafNode[K, V]:
         return self
 
-    def split(self):
+    def split(self) -> Tuple[K, LeafNode[K, V]]:
         """creates a new right sibling and moves half its keys over"""
-        right_sib = LeafNode(self, self.next_leaf)
+        right_sib = LeafNode(self.tree, self, self.next_leaf)
         if right_sib.next_leaf:
             right_sib.next_leaf.prev_leaf = right_sib
         self.next_leaf = right_sib
@@ -249,7 +268,7 @@ class LeafNode:
         median = right_sib.entries[0].key
         return median, right_sib
 
-    def insert(self, key, value):
+    def insert(self, key: K, value: V) -> ChildStatus:
         """
         Insert the key and value into this leaf.
         Notify the parent of the result.
@@ -268,13 +287,13 @@ class LeafNode:
             # insert the entry
             self.entries.insert(i, e)
 
-        if len(self.entries) > MAX_KEYS:
-            return REBALANCE
+        if len(self.entries) > self.tree.MAX_KEYS:
+            return ChildStatus.REBALANCE
 
         # inserted without a problem
-        return DONE
+        return ChildStatus.DONE
 
-    def delete(self, key):
+    def delete(self, key: K) -> ChildStatus:
         """
         Remove the entry given by key
         If we're deficient, signal to the parent by returning
@@ -285,11 +304,11 @@ class LeafNode:
 
         if self.entries[i] == dummy:
             del self.entries[i]
-            if len(self.entries) < MIN_KEYS:
-                return REBALANCE
-        return DONE
+            if len(self.entries) < self.tree.MIN_KEYS:
+                return ChildStatus.REBALANCE
+        return ChildStatus.DONE
 
-    def borrow_right(self, _median, right_sib):
+    def borrow_right(self, _median: K, right_sib: LeafNode[K, V]) -> K:
         """
         borrow from right sib
         return the new keyslice for parent to use
@@ -301,7 +320,7 @@ class LeafNode:
         self.entries.append(e)
         return right_sib.entries[0].key
 
-    def borrow_left(self, _median, left_sib):
+    def borrow_left(self, _median: K, left_sib: LeafNode[K, V]) -> K:
         """
         borrow from left sib
         return the new keyslice for parent to use
@@ -313,7 +332,7 @@ class LeafNode:
         self.entries.insert(0, e)
         return self.entries[0].key
 
-    def merge(self, _median, right_sib):
+    def merge(self, _median: K, right_sib: LeafNode[K, V]) -> LeafNode[K, V]:
         """
         merge with the right sibling.
         return a pointer to the new child.
@@ -327,5 +346,5 @@ class LeafNode:
             self.next_leaf.prev_leaf = self
         return self
 
-    def is_minimal(self):
-        return len(self.entries) <= MIN_KEYS
+    def is_minimal(self) -> bool:
+        return len(self.entries) <= self.tree.MIN_KEYS

@@ -1,6 +1,7 @@
 """Data agnostic caching utilities.
 """
 
+from dbstuff.util import ReadWriteLock
 from weakref import WeakValueDictionary
 from collections import OrderedDict
 
@@ -55,6 +56,7 @@ class LRUCache:
         self.hits = 0
         self.misses = 0
         self.resurrections = 0
+        self.rwlock = ReadWriteLock()
 
     def get(self, key, default=None):
         """Retrieve an item from the cache if it exists.
@@ -63,20 +65,22 @@ class LRUCache:
         :param default: The default value to return if the item doesn't exist.
         :return: The value associated with key.
         """
-        try:
-            value = self.lru[key]
-            self.hits += 1
-        except KeyError:
-            # try to resurrect
-            value = self.grave.pop(key, None)
-            if value is not None:
-                self.lru[key] = value
-                self.resurrections += 1
-            else:
-                self.misses += 1
-                return default
 
-        self.lru.move_to_end(key)
+        with self.rwlock.read_access:
+            try:
+                value = self.lru[key]
+                self.hits += 1
+            except KeyError:
+                # try to resurrect
+                value = self.grave.pop(key, None)
+                if value is not None:
+                    self.lru[key] = value
+                    self.resurrections += 1
+                else:
+                    self.misses += 1
+                    return default
+
+            self.lru.move_to_end(key)
         return value
 
     def set(self, key, value):
@@ -85,18 +89,19 @@ class LRUCache:
         :param key: The key for the item.
         :param value: The value to store.
         """
-        if key in self.grave:
-            del self.grave[key]
+        with self.rwlock.write_access:
+            if key in self.grave:
+                del self.grave[key]
 
-        if key in self.lru:
-            self.lru.move_to_end(key)
-        self.lru[key] = value
+            if key in self.lru:
+                self.lru.move_to_end(key)
+            self.lru[key] = value
 
-        while len(self.lru) > self.maxsize:
-            # remove old items from the cache
-            # send them to live with the dead
-            (k, v) = self.lru.popitem(last=False)
-            self.grave[k] = v
+            while len(self.lru) > self.maxsize:
+                # remove old items from the cache
+                # send them to live with the dead
+                (k, v) = self.lru.popitem(last=False)
+                self.grave[k] = v
 
     def delete(self, key):
         """Remove a value from the cache.
@@ -105,7 +110,8 @@ class LRUCache:
 
         :param key: The key to delete.
         """
-        if key in self.grave:
-            del self.grave[key]
-        if key in self.lru:
-            del self.lru[key]
+        with self.rwlock.write_access:
+            if key in self.grave:
+                del self.grave[key]
+            if key in self.lru:
+                del self.lru[key]

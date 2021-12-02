@@ -8,11 +8,3 @@ poetry.lock
 
 # pytest
 .pytest_cache/
-
-# VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-*.code-workspace
